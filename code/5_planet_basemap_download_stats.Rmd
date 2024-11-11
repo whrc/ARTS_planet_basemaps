@@ -1,0 +1,104 @@
+---
+title: "Planet Basemap Download Stats"
+author: "Heidi Rodenhizer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Load Packages
+```{r}
+library(sf)
+library(rnaturalearth)
+library(viridis)
+library(tidyverse)
+```
+
+```{r}
+theme_set(theme_bw())
+```
+
+# Load Data
+
+```{r}
+planet_grids = st_read('./data/planet_grids_for_arts_closest_year.geojson')
+world = rnaturalearth::ne_countries(scale = "large", returnclass = "sf")
+world = world |>
+  st_transform(3413) |>
+  st_crop(planet_grids |>
+            st_bbox() |>
+            st_as_sfc() |>
+            st_buffer(dist = 200000) |>
+            st_bbox())
+```
+
+# Data Stats
+
+```{r}
+print(
+  paste('The total number of images downloaded is', 
+        nrow(planet_grids))
+  )
+```
+
+```{r}
+planet_grids_count = planet_grids |>
+  summarise(n = n(),
+            .by = c(geometry))
+```
+
+# Map of Downloads
+
+```{r, fig.height=7.5, fig.width=6.5}
+ggplot() + 
+  geom_sf(
+    data = world,
+    color = 'transparent',
+    # fill = '#EEFFDD',
+    fill = 'white'
+  ) +
+  geom_sf(
+    data = planet_grids_count,
+    aes(color = n,
+        fill = n),
+    linewidth = 0.3,
+    alpha = 0.5
+  ) +
+  # scale_color_viridis(name = 'N Years',
+  #                     direction = -1) +
+  # scale_fill_viridis(name = 'N Years',
+  #                     direction = -1) +
+  scale_color_gradient(
+    name = 'Image\nCount',
+    low = 'gray60',
+    high = 'black'
+    # low = '#6699FF',
+    # high = '#000033'
+  ) +
+  scale_fill_gradient(
+    name = 'Image\nCount',
+    low = 'gray60',
+    high = 'black'
+    # low = '#6699FF',
+    # high = '#000033'
+  ) +
+  geom_sf(data = world,
+          color = 'gray20',
+          fill = 'transparent') +
+  coord_sf(expand = FALSE) +
+  theme(
+    panel.background = element_rect(
+      # fill = '#DDEEFF'
+      fill = 'gray90'
+      ),
+    panel.grid = element_line(
+      # color = 'gray90
+      color = 'gray80'
+      ),
+    legend.position = 'inside',
+    legend.position.inside = c(0.998, 0.002),
+    legend.justification = c(1, 0)
+  )
+
+# ggsave('./figures/planet_basemap_downloads.jpg')
+```
+
