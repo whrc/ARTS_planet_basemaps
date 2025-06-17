@@ -21,6 +21,7 @@ theme_set(theme_bw())
 
 ```{r}
 planet_grids = st_read('./data/planet_grids_for_arts_closest_year.geojson')
+rts_imagery_correspondence = st_read('./data/rts_polygon_basemap_correspondence.geojson')
 world = rnaturalearth::ne_countries(scale = "large", returnclass = "sf")
 world = world |>
   st_transform(3413) |>
@@ -100,5 +101,35 @@ ggplot() +
   )
 
 # ggsave('./figures/planet_basemap_downloads.jpg')
+```
+
+```{r}
+rts_correspondence = rts_correspondence |>
+  mutate(
+    n_tiles = n_distinct(id), 
+    .by = c(UID, BaseMapDate)
+  ) |>
+  mutate(
+    n_per_year = n(),
+    .by = c(UID, BaseMapDate, planet_basemap_year)
+  )
+```
+
+```{r}
+View(
+  rts_correspondence |> 
+    filter(n_tiles != n_per_year) |>
+    arrange(UID, planet_basemap_year)
+  )
+```
+
+```{r}
+ggplot() +
+  geom_sf(
+    data = rts_correspondence |>
+      filter(UID == '00026b6e-fd03-5394-916d-7ff72e902849'),
+    aes(color = as.factor(planet_basemap_year)),
+    fill = 'transparent'
+  )
 ```
 
