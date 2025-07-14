@@ -1,0 +1,231 @@
+---
+title: "ARTS Planet Basemap Grids to Download"
+author: "Heidi Rodenhizer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Load Packages
+
+```{r}
+library(sf)
+library(viridis)
+library(tidyverse)
+theme_set(theme_bw())
+```
+
+# Load Data
+
+```{r}
+arts = st_read('../ARTS/ARTS_main_dataset/v.2.1.0/ARTS_main_dataset_v.2.1.0.geojson')
+planet_grids = st_read('./data/circumpolar_global_basemap_grids.geojson')
+```
+
+# Intersection
+
+```{r}
+planet_grids_filter = planet_grids %>%
+  st_transform(st_crs(arts)) %>%
+  filter(
+    map_lgl(
+      st_intersects(., arts, sparse = TRUE),
+      ~ length(.x) > 0
+    )
+  )
+
+arts_grids = planet_grids_filter |>
+  mutate(planet_basemap_year = as.numeric(str_extract(name, '\\d{4}'))) |>
+  st_transform(st_crs(arts)) |>
+  st_join(
+    arts,
+    left = FALSE # for inner join
+    ) |>
+  mutate(replicate = row_number(),
+         .by = c(CentroidLat, CentroidLon)) |>
+  select(
+    UID,
+    planet_basemap_year, 
+    BaseMapDate, 
+    CentroidLat, 
+    CentroidLon, 
+    id:percent_covered, 
+    replicate
+    ) |>
+  separate_wider_delim(
+    BaseMapDate, 
+    ',',
+    names = c('start_year', 'end_year'),
+    cols_remove = FALSE
+    ) |>
+  mutate(
+    across(
+      start_year:end_year,
+      ~ .x |>
+        ymd() |>
+        year()
+      ),
+    # having NA in start_year doesn't work with line 4 of target_year = case_when(...), so swith to 0
+    start_year = case_when(is.na(start_year) ~ 0,
+                           TRUE ~ start_year)
+  ) |>
+  filter(
+    # if the earliest planet basemap is after the last date of the delineation imagery, keep the earliest basemap year
+    (planet_basemap_year > end_year & planet_basemap_year == min(planet_basemap_year)) |
+     # if the planet basemap falls between (or is equal to) the start and end years of the delineation imagery, keep the row
+     (start_year != 0 & planet_basemap_year >= start_year & planet_basemap_year <= end_year) |
+     # if the start year of the delineation imagery is unknown, keep the earliest basemap year
+      (start_year == 0 & planet_basemap_year == min(planet_basemap_year)),
+    .by = c(UID, CentroidLat, CentroidLon)
+  ) |>
+  rowwise() |>
+  mutate(
+    min_discrepancy = case_when(
+      start_year == 0 & planet_basemap_year <= end_year ~ 0,
+      start_year == 0 & planet_basemap_year > end_year ~ planet_basemap_year - end_year,
+      start_year <= planet_basemap_year & planet_basemap_year <= end_year ~ 0,
+      planet_basemap_year > end_year ~ planet_basemap_year - end_year,
+      start_year > planet_basemap_year ~ planet_basemap_year - start_year,
+    ),
+    max_discrepancy = case_when(
+     start_year == 0 ~ NA_real_,
+      TRUE ~ c(
+        planet_basemap_year - start_year, 
+        planet_basemap_year - end_year
+      )[which(
+        c(
+          abs(planet_basemap_year - start_year), 
+          abs(planet_basemap_year - end_year)
+        ) == max(
+          c(
+            abs(planet_basemap_year - start_year), 
+            abs(planet_basemap_year - end_year)
+          )
+        )
+      )][1]
+    )
+  ) |>
+  ungroup() |>
+  st_as_sf()
+
+# st_write(
+#   arts_grids,
+#   './data/rts_polygon_basemap_correspondence.geojson'
+#   )
+
+arts_grids_filter = arts_grids |>
+  slice(1, .by = c('id', 'planet_basemap_year')) |>
+  select(planet_basemap_year, id, link, replicate) |>
+  arrange(id, planet_basemap_year)
+
+print(
+  paste(
+    'Storage Space for Planet Basemap Grids in Closest Year to Each RTS:', 
+    round(
+      nrow(arts_grids_filter)*30/1000/1000, 
+      2
+      ),
+    '(TB)'
+    )
+  )
+
+# if we got all years for each grid?
+grid_ids = arts_grids_filter |>
+  pull(id) |>
+  unique()
+
+print(
+  paste(
+    'Storage Space for Planet Basemap Grids in All Available Years:', 
+    round(
+      nrow(expand_grid(id = grid_ids, year = basemap_years))*30/1000/1000, 
+      2
+      ),
+    '(TB)'
+    )
+  )
+```
+
+```{r}
+grid_counts_by_id = arts_grids_filter |>
+  st_drop_geometry() |>
+  count(id)
+
+print(
+  paste(
+    'Number of unique grid locations:', 
+    as.character(nrow(grid_counts_by_id))
+  )
+)
+
+print(
+  paste(
+    'Number of grids with multiple years', 
+    nrow(grid_counts_by_id |> filter(n > 1))
+  )
+)
+
+ggplot(grid_counts_by_id, aes(x = n)) +
+  geom_histogram(binwidth = 1) +
+  scale_x_continuous(name = 'Number of Years per Basemap Grid') +
+  scale_y_continuous(expand = expand_scale(mult = c(0, 0.05)))
+
+ggplot(arts_grids, 
+       aes(x = min_discrepancy,
+           color = min_discrepancy > 0,
+           fill = min_discrepancy > 0),
+       linewidth = 0.1) +
+  geom_histogram(binwidth = 1) +
+  scale_color_manual(name = 'Planet Basemap\nNewer than\nDelineation Imagery', 
+                     values = c('black', 'red')) +
+  scale_fill_manual(name = 'Planet Basemap\nNewer than\nDelineation Imagery', 
+                    values = c('black', 'red')) +
+  scale_x_continuous(name = 'Minimum Discrepancy') +
+  scale_y_continuous(name = 'Count',
+                     expand = expand_scale(mult = c(0, 0.05)))
+
+arts_grids |>
+  count(min_discrepancy)
+
+ggplot(arts_grids, 
+       aes(x = max_discrepancy,
+           color = max_discrepancy > 0,
+           fill = max_discrepancy > 0),
+       linewidth = 0.1) +
+  geom_histogram(binwidth = 1) +
+  scale_color_manual(name = 'Planet Basemap\nNewer than\nDelineation Imagery', 
+                     values = c('black', 'red')) +
+  scale_fill_manual(name = 'Planet Basemap\nNewer than\nDelineation Imagery', 
+                    values = c('black', 'red')) +
+  scale_x_continuous(name = 'Maximum Discrepancy') +
+  scale_y_continuous(name = 'Count',
+                     expand = expand_scale(mult = c(0, 0.05)))
+
+arts_grids |>
+  count(max_discrepancy)
+```
+
+# Map of Output
+
+```{r}
+ggplot() +
+  geom_sf(
+    data = arts, 
+    color = 'black', 
+    fill = 'black',
+    size = 0.1,
+    linewidth = 0.1
+    ) +
+  geom_sf(
+    data = arts_grids_filter, 
+    aes(color = factor(planet_basemap_year)), 
+    fill = 'transparent',
+    ) +
+  scale_color_viridis(discrete = TRUE)
+```
+
+# Save Output
+
+```{r}
+st_write(arts_grids_filter, './data/planet_grids_for_arts_closest_year.geojson')
+```
+
