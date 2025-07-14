@@ -17,8 +17,19 @@ theme_set(theme_bw())
 # Load Data
 
 ```{r}
-arts = st_read('../ARTS/ARTS_main_dataset/v.2.1.0/ARTS_main_dataset_v.2.1.0.geojson')
+arts = st_read('../ARTS/ARTS_main_dataset/v.3.1.0/ARTS_main_dataset_v.3.1.0.geojson')
 planet_grids = st_read('./data/circumpolar_global_basemap_grids.geojson')
+```
+
+# ARTS Tiles
+
+```{r}
+arts_tiles = arts |>
+  st_centroid() |>
+  st_buffer(
+    dist = 128 * 4.77, # 256 pixel sides
+    endCapStyle = "SQUARE"
+  )
 ```
 
 # Intersection
@@ -26,12 +37,7 @@ planet_grids = st_read('./data/circumpolar_global_basemap_grids.geojson')
 ```{r}
 planet_grids_filter = planet_grids %>%
   st_transform(st_crs(arts)) %>%
-  filter(
-    map_lgl(
-      st_intersects(., arts, sparse = TRUE),
-      ~ length(.x) > 0
-    )
-  )
+  st_filter(arts)
 
 arts_grids = planet_grids_filter |>
   mutate(planet_basemap_year = as.numeric(str_extract(name, '\\d{4}'))) |>
@@ -64,7 +70,7 @@ arts_grids = planet_grids_filter |>
         ymd() |>
         year()
       ),
-    # having NA in start_year doesn't work with line 4 of target_year = case_when(...), so swith to 0
+    # having NA in start_year doesn't work with line 4 of target_year = case_when(...), so switch to 0
     start_year = case_when(is.na(start_year) ~ 0,
                            TRUE ~ start_year)
   ) |>
@@ -109,7 +115,7 @@ arts_grids = planet_grids_filter |>
 
 # st_write(
 #   arts_grids,
-#   './data/rts_polygon_basemap_correspondence.geojson'
+#   './data/rts_polygon_basemap_correspondence_v.3.1.0.geojson'
 #   )
 
 arts_grids_filter = arts_grids |>
@@ -131,6 +137,10 @@ print(
 # if we got all years for each grid?
 grid_ids = arts_grids_filter |>
   pull(id) |>
+  unique()
+
+basemap_years = arts_grids_filter |>
+  pull(planet_basemap_year) |>
   unique()
 
 print(
@@ -226,6 +236,6 @@ ggplot() +
 # Save Output
 
 ```{r}
-st_write(arts_grids_filter, './data/planet_grids_for_arts_closest_year.geojson')
+st_write(arts_grids_filter, './data/planet_grids_for_arts_closest_year_v.3.1.0.geojson')
 ```
 
