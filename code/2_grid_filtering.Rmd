@@ -9,6 +9,7 @@ output: html_document
 
 ```{r}
 library(sf)
+library(rnaturalearth)
 library(viridis)
 library(tidyverse)
 theme_set(theme_bw())
@@ -19,6 +20,15 @@ theme_set(theme_bw())
 ```{r}
 arts = st_read('../ARTS/ARTS_main_dataset/v.3.1.0/ARTS_main_dataset_v.3.1.0.geojson')
 planet_grids = st_read('./data/circumpolar_global_basemap_grids.geojson')
+world = rnaturalearth::ne_countries(scale = "large", returnclass = "sf")
+world = world |>
+  st_transform(3413) |>
+  st_crop(planet_grids |>
+            st_transform(3413) |>
+            st_bbox() |>
+            st_as_sfc() |>
+            st_buffer(dist = 200000) |>
+            st_bbox())
 ```
 
 # ARTS Tiles
@@ -239,3 +249,75 @@ ggplot() +
 st_write(arts_grids_filter, './data/planet_grids_for_arts_closest_year_v.3.1.0.geojson')
 ```
 
+# Additional Imagery Since ARTS v.2.1.0
+
+```{r}
+arts_grid_filter_v.2.1.0 = st_read("./data/planet_grids_for_arts_closest_year_v.2.1.0.geojson")
+arts_grid_filter_v.3.1.0 = st_read("./data/planet_grids_for_arts_closest_year_v.3.1.0.geojson")
+```
+
+```{r}
+new_grids = anti_join(
+  arts_grid_filter_v.3.1.0, 
+  arts_grid_filter_v.2.1.0 |>
+    st_drop_geometry()
+)
+
+nrow(new_grids)
+
+# st_write(
+#   new_grids,
+#   "./data/arts_download_redo_new_grids.geojson"
+# )
+```
+
+```{r}
+new_grids_bbox = st_bbox(new_grids)
+new_grids_xlim = c(new_grids_bbox[c("xmin", "xmax")])
+new_grids_ylim = c(new_grids_bbox[c("ymin", "ymax")])
+
+ggplot() +
+  geom_sf(data = world) +
+  geom_sf(data = new_grids,
+          aes(
+            color = planet_basemap_year
+          ),
+          fill = "transparent") +
+  scale_color_viridis() +
+  coord_sf(
+    xlim = new_grids_xlim,
+    ylim = new_grids_ylim
+  )
+```
+
+## Which Grids Are Required Adjacent Grids (Not New Data in v.3.1.0)
+
+```{r}
+arts_v.2.1.0 = st_read('../ARTS/ARTS_main_dataset/v.2.1.0/ARTS_main_dataset_v.2.1.0.geojson')
+```
+
+```{r}
+new_rts = arts |>
+  anti_join(
+    arts_v.2.1.0 |>
+      st_drop_geometry()
+  )
+
+new_rts_tiles = new_rts |>
+  st_buffer(
+    dist = 128 * 4.77, # 256 pixel sides
+    endCapStyle = "SQUARE"
+  )
+
+new_adjacent_grids = new_grids %>%
+  filter(
+    !(
+      st_intersects(., new_rts_tiles) %>%
+        map_lgl(
+          ~ length(.x) > 0
+        )
+    )
+  )
+```
+
+Apparently, none of the added grids were due to missing adjacent imagery. They were all due to added RTS in ARTS v.3.1.0.

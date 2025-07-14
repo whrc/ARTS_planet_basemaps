@@ -129,7 +129,35 @@ ggplot() +
 # ggsave('./figures/planet_basemap_downloads.jpg')
 ```
 
-Look for Missing Basemaps
+# Look for Missing Basemaps
+
+The training tile log doesn't include information about tiles with missing patches of imagery.
+```{r}
+training_tile_log = read_delim(
+  "./data/training_tile_processing_log.txt",
+  delim = "\n",
+  col_names = c("log_message")
+) |>
+  mutate(
+    UID = str_extract(
+      log_message, 
+      "[:alnum:]{8}-[:alnum:]{4}-[:alnum:]{4}-[:alnum:]{4}-[:alnum:]{12}"
+    ),
+    status = str_split_i(
+      log_message,
+      ": ",
+      -1
+    ),
+    status = factor(
+      status,
+      levels = unique(status)
+    )
+  )
+
+levels(training_tile_log$status)
+```
+
+## Training Tile Preparation Failed to Find These Grids
 
 ```{r}
 rts_imagery_correspondence = rts_imagery_correspondence |>
@@ -240,9 +268,30 @@ missing_basemap_locations = downloads |>
                         pull(id)))
   )
 
-st_write(missing_basemap_locations,
-         './data/lost_imagery_locations.geojson')
+# st_write(missing_basemap_locations,
+#          './data/lost_imagery_locations.geojson')
 ```
+
+```{r}
+missing_basemaps_bbox = st_bbox(missing_basemaps)
+missing_basemaps_xlim = c(missing_basemaps_bbox[c("xmin", "xmax")])
+missing_basemaps_ylim = c(missing_basemaps_bbox[c("ymin", "ymax")])
+
+ggplot() +
+  geom_sf(data = world) +
+  geom_sf(data = missing_basemaps,
+          aes(
+            color = planet_basemap_year
+          ),
+          fill = "transparent") +
+  scale_color_viridis() +
+  coord_sf(
+    xlim = missing_basemaps_xlim,
+    ylim = missing_basemaps_ylim
+  )
+```
+
+## Some of These Are Missing Imagery
 
 ```{r}
 missing_basemaps = rts_imagery_correspondence |>
@@ -267,5 +316,24 @@ missing_basemap_locations = downloads |>
     type == 'quad' & 
       id %in% unique((missing_basemaps |> 
                         pull(id)))
+  )
+```
+
+```{r}
+missing_basemaps_bbox = st_bbox(missing_basemaps)
+missing_basemaps_xlim = c(missing_basemaps_bbox[c("xmin", "xmax")])
+missing_basemaps_ylim = c(missing_basemaps_bbox[c("ymin", "ymax")])
+
+ggplot() +
+  geom_sf(data = world) +
+  geom_sf(data = missing_basemaps,
+          aes(
+            color = planet_basemap_year
+          ),
+          fill = "transparent") +
+  scale_color_viridis() +
+  coord_sf(
+    xlim = missing_basemaps_xlim,
+    ylim = missing_basemaps_ylim
   )
 ```
