@@ -244,3 +244,28 @@ st_write(missing_basemap_locations,
          './data/lost_imagery_locations.geojson')
 ```
 
+```{r}
+missing_basemaps = rts_imagery_correspondence |>
+  filter(
+    UID %in% c(
+      '0a6a6a89-464b-58a9-b00d-a914bae421c7',
+      '0a071b10-d902-56a1-aa32-487d85bdf2ea',
+      'f668360d-632a-514e-89b8-7a2dd8016c40'
+    )
+  ) |>
+  arrange(UID)
+
+missing_basemap_locations = downloads |>
+  mutate(
+    file = str_split_i(filename, '/', i = 6),
+    id = str_split_i(file, '_', i = 5),
+    type = file |>
+      str_split_i('_', i = 6) |>
+      str_split_i('\\.', i = 1)
+  ) |>
+  filter(
+    type == 'quad' & 
+      id %in% unique((missing_basemaps |> 
+                        pull(id)))
+  )
+```
