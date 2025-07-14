@@ -1,0 +1,271 @@
+---
+title: "Planet Basemap Download Stats"
+author: "Heidi Rodenhizer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Load Packages
+```{r}
+library(sf)
+library(rnaturalearth)
+library(viridis)
+library(ggnewscale)
+library(tidyverse)
+```
+
+```{r}
+theme_set(theme_bw())
+```
+
+# Functions
+
+```{r}
+plot_rts_and_basemaps = function(uid) {
+  ggplot() +
+  geom_sf(
+    data = rts_imagery_correspondence |>
+      filter(UID == uid),
+    aes(color = as.factor(planet_basemap_year),
+        linewidth = as.factor(planet_basemap_year)),
+    fill = 'transparent'
+  ) +
+  scale_color_discrete(name = 'Planet Basemap Year') +
+  scale_linewidth_manual(name = 'Planet Basemap Year',
+                         values = c(2.5, 2, 1.5, 1, 0.5)) +
+  new_scale_color() +
+  geom_sf(data = arts |>
+            filter(UID == uid),
+          aes(color = BaseMapDate)) +
+  ggtitle(paste('UID =', uid))
+}
+```
+
+# Load Data
+
+```{r}
+planet_grids = st_read('./data/planet_grids_for_arts_closest_year.geojson')
+rts_imagery_correspondence = st_read('./data/rts_polygon_basemap_correspondence.geojson')
+arts = st_read('../ARTS/ARTS_main_dataset/v.2.1.0/ARTS_main_dataset_v.2.1.0.geojson')
+downloads = read_csv('./data/download/planet_basemap_downloads.csv')
+world = rnaturalearth::ne_countries(scale = "large", returnclass = "sf")
+world = world |>
+  st_transform(3413) |>
+  st_crop(planet_grids |>
+            st_bbox() |>
+            st_as_sfc() |>
+            st_buffer(dist = 200000) |>
+            st_bbox())
+```
+
+# Data Stats
+
+```{r}
+print(
+  paste('The total number of images downloaded is', 
+        nrow(planet_grids))
+  )
+```
+
+```{r}
+planet_grids_count = planet_grids |>
+  summarise(n = n(),
+            .by = c(geometry))
+```
+
+# Map of Downloads
+
+```{r, fig.height=7.5, fig.width=6.5}
+ggplot() + 
+  geom_sf(
+    data = world,
+    color = 'transparent',
+    # fill = '#EEFFDD',
+    fill = 'white'
+  ) +
+  geom_sf(
+    data = planet_grids_count,
+    aes(color = n,
+        fill = n),
+    linewidth = 0.3,
+    alpha = 0.5
+  ) +
+  # scale_color_viridis(name = 'N Years',
+  #                     direction = -1) +
+  # scale_fill_viridis(name = 'N Years',
+  #                     direction = -1) +
+  scale_color_gradient(
+    name = 'Image\nCount',
+    low = 'gray60',
+    high = 'black'
+    # low = '#6699FF',
+    # high = '#000033'
+  ) +
+  scale_fill_gradient(
+    name = 'Image\nCount',
+    low = 'gray60',
+    high = 'black'
+    # low = '#6699FF',
+    # high = '#000033'
+  ) +
+  geom_sf(data = world,
+          color = 'gray20',
+          fill = 'transparent') +
+  coord_sf(expand = FALSE) +
+  theme(
+    panel.background = element_rect(
+      # fill = '#DDEEFF'
+      fill = 'gray90'
+      ),
+    panel.grid = element_line(
+      # color = 'gray90
+      color = 'gray80'
+      ),
+    legend.position = 'inside',
+    legend.position.inside = c(0.998, 0.002),
+    legend.justification = c(1, 0)
+  )
+
+# ggsave('./figures/planet_basemap_downloads.jpg')
+```
+
+Look for Missing Basemaps
+
+```{r}
+rts_imagery_correspondence = rts_imagery_correspondence |>
+  mutate(
+    n_tiles = n_distinct(id), 
+    .by = c(UID, BaseMapDate)
+  ) |>
+  mutate(
+    n_per_year = n(),
+    .by = c(UID, BaseMapDate, planet_basemap_year)
+  )
+```
+
+```{r}
+View(
+  rts_imagery_correspondence |> 
+    filter(n_tiles != n_per_year) |>
+    arrange(UID, planet_basemap_year)
+  )
+```
+
+```{r}
+current_uid = 'bf7f808c-7a3a-5794-9448-2ff4d71f0139'
+View(
+  rts_imagery_correspondence |> 
+    filter(UID == current_uid)
+  )
+```
+
+```{r}
+plot_rts_and_basemaps(current_uid)
+```
+
+```{r}
+current_uid = '011811cf-9b8c-5167-b151-331453254eee'
+View(
+  rts_imagery_correspondence |> 
+    filter(UID == current_uid)
+  )
+```
+
+```{r}
+plot_rts_and_basemaps(current_uid)
+```
+
+```{r}
+current_uid = '3cbbe4ee-99ab-5053-881f-bb782287735b'
+View(
+  rts_imagery_correspondence |> 
+    filter(UID == current_uid)
+  )
+```
+
+```{r}
+plot_rts_and_basemaps(current_uid)
+```
+
+```{r}
+current_uid = 'c5a67692-36c1-5d59-a117-5cd628adf207'
+View(
+  rts_imagery_correspondence |> 
+    filter(UID == current_uid)
+  )
+```
+
+```{r}
+plot_rts_and_basemaps(current_uid)
+```
+
+```{r}
+current_uid = 'ffa7a2b1-2f99-5c25-be39-28040038167d'
+View(
+  rts_imagery_correspondence |> 
+    filter(UID == current_uid)
+  )
+```
+
+```{r}
+plot_rts_and_basemaps(current_uid)
+```
+
+Get storage location for all the imagery tiles in question
+
+```{r}
+missing_basemaps = rts_imagery_correspondence |>
+  filter(
+    UID %in% c(
+      'bf7f808c-7a3a-5794-9448-2ff4d71f0139',
+      '011811cf-9b8c-5167-b151-331453254eee',
+      '3cbbe4ee-99ab-5053-881f-bb782287735b',
+      'c5a67692-36c1-5d59-a117-5cd628adf207',
+      'ffa7a2b1-2f99-5c25-be39-28040038167d'
+    )
+  ) |>
+  arrange(UID)
+
+missing_basemap_locations = downloads |>
+  mutate(
+    file = str_split_i(filename, '/', i = 6),
+    id = str_split_i(file, '_', i = 5),
+    type = file |>
+      str_split_i('_', i = 6) |>
+      str_split_i('\\.', i = 1)
+  ) |>
+  filter(
+    type == 'quad' & 
+      id %in% unique((missing_basemaps |> 
+                        pull(id)))
+  )
+
+st_write(missing_basemap_locations,
+         './data/lost_imagery_locations.geojson')
+```
+
+```{r}
+missing_basemaps = rts_imagery_correspondence |>
+  filter(
+    UID %in% c(
+      '0a6a6a89-464b-58a9-b00d-a914bae421c7',
+      '0a071b10-d902-56a1-aa32-487d85bdf2ea',
+      'f668360d-632a-514e-89b8-7a2dd8016c40'
+    )
+  ) |>
+  arrange(UID)
+
+missing_basemap_locations = downloads |>
+  mutate(
+    file = str_split_i(filename, '/', i = 6),
+    id = str_split_i(file, '_', i = 5),
+    type = file |>
+      str_split_i('_', i = 6) |>
+      str_split_i('\\.', i = 1)
+  ) |>
+  filter(
+    type == 'quad' & 
+      id %in% unique((missing_basemaps |> 
+                        pull(id)))
+  )
+```

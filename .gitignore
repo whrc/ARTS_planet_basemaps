@@ -1,3 +1,8 @@
+.env
+data/
+figures/
+*.qgz
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
