@@ -267,7 +267,7 @@ nrow(new_grids)
 
 # st_write(
 #   new_grids,
-#   "./data/arts_download_redo_new_grids.geojson"
+#   "./data/new_planet_grids_for_arts_closest_year_v.3.1.0.geojson"
 # )
 ```
 
