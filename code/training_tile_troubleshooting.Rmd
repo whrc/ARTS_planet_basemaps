@@ -1,0 +1,198 @@
+---
+title: "Planet Imagery Updates 2025"
+output: html_document
+date: "2025-06-25"
+---
+
+# Load Packages
+
+```{r}
+library(sf)
+library(tidyverse)
+```
+
+# Load Data
+
+```{r}
+arts = st_read(
+  "../ARTS/ARTS_main_dataset/v.3.1.0/ARTS_main_dataset_v.3.1.0.geojson"
+)
+
+orders = rbind(
+  read_csv("./data/download/planet_basemap_orders.csv"),
+  read_csv("./data/download_20250715/planet_basemap_orders.csv")
+)
+
+planet_grids = st_read(
+  "./data/planet_grids_for_arts_closest_year_v.3.1.0.geojson"
+) |>
+  select(-c(link, replicate))
+```
+
+# ARTS Tiles
+
+```{r}
+arts = arts |>
+  separate(
+    BaseMapDate,
+    into = c("BaseMapStartDate", "BaseMapEndDate"),
+    sep = ",",
+    remove = FALSE
+  ) |>
+  mutate(
+    across(
+      .cols = c(BaseMapStartDate, BaseMapEndDate),
+      ~ as_date(.x)
+    )
+  )
+```
+
+```{r}
+arts_tiles = arts |>
+  st_centroid() |>
+  st_buffer(
+    dist = 128 * 4.77, # 256 pixel sides
+    endCapStyle = "SQUARE"
+  )
+```
+
+# Extract Orders Info
+
+```{r}
+orders = orders |>
+  mutate(
+    planet_basemap_year = as.integer(
+      str_extract(
+        order_name,
+        "\\d{4}"
+      )
+    ),
+    id = str_extract(
+      order_info,
+      "'quad_ids': \\[('(\\d){1,4}-(\\d){1,4}',\\s){1,10}('(\\d){1,4}-(\\d){1,4}')\\]"
+    ),
+    id = str_extract_all(
+      id,
+      "(\\d){1,4}-(\\d){1,4}"
+    ),
+    .before = order_name
+  ) |>
+  unnest(id) |>
+  select(-order_info) |>
+  distinct(planet_basemap_year, id, .keep_all = TRUE)
+```
+
+```{r}
+planet_grids = planet_grids |>
+  full_join(orders, by = c("planet_basemap_year", "id"))
+```
+
+```{r}
+basemaps_per_polygon = planet_grids |>
+  st_join(
+    arts_tiles,
+    join = st_intersects,
+    left = FALSE
+  ) |>
+  select(
+    UID,
+    BaseMapStartDate,
+    BaseMapEndDate,
+    planet_basemap_year,
+    id,
+    order_name,
+    geometry
+  )
+```
+
+
+```{r}
+uid = "00026b6e-fd03-5394-916d-7ff72e902849"
+
+View(
+  basemaps_per_polygon |>
+    filter(UID == uid) |>
+    arrange(planet_basemap_year, id)
+)
+
+ggplot() +
+  geom_sf(
+    data = basemaps_per_polygon |>
+      filter(UID == uid),
+    aes(color = as.factor(planet_basemap_year)),
+    linewidth = 0.5,
+    fill = "transparent"
+  ) +
+  geom_sf(
+    data = arts_tiles |>
+      filter(UID == uid),
+    linewidth = 1,
+    fill = "transparent"
+  ) +
+  geom_sf(
+    data = arts |>
+      filter(UID == uid),
+    color = "darkred",
+  )
+```
+
+```{r}
+uid = "000b9f49-6ab4-58aa-bcd9-64ddedf3f444"
+
+View(
+  basemaps_per_polygon |>
+    filter(UID == uid) |>
+    arrange(planet_basemap_year, id)
+)
+
+ggplot() +
+  geom_sf(
+    data = basemaps_per_polygon |>
+      filter(UID == uid),
+    aes(color = as.factor(planet_basemap_year)),
+    linewidth = 0.5,
+    fill = "transparent"
+  ) +
+  geom_sf(
+    data = arts_tiles |>
+      filter(UID == uid),
+    linewidth = 1,
+    fill = "transparent"
+  ) +
+  geom_sf(
+    data = arts |>
+      filter(UID == uid),
+    color = "darkred",
+  )
+```
+
+```{r}
+uid = "00280fe0-c898-5d15-bc60-0fff66fa0c46"
+
+View(
+  basemaps_per_polygon |>
+    filter(UID == uid) |>
+    arrange(planet_basemap_year, id)
+)
+
+ggplot() +
+  geom_sf(
+    data = basemaps_per_polygon |>
+      filter(UID == uid),
+    aes(color = as.factor(planet_basemap_year)),
+    linewidth = 0.5,
+    fill = "transparent"
+  ) +
+  geom_sf(
+    data = arts_tiles |>
+      filter(UID == uid),
+    linewidth = 1,
+    fill = "transparent"
+  ) +
+  geom_sf(
+    data = arts |>
+      filter(UID == uid),
+    color = "darkred",
+  )
+```
+
