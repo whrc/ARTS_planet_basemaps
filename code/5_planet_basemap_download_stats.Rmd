@@ -73,6 +73,31 @@ planet_grids_count = planet_grids |>
             .by = c(geometry))
 ```
 
+```{r}
+resolution = tibble(
+  latitude = seq(50, 75, by = 5)
+) |>
+  mutate(
+    latitude_rad = latitude*2*pi/360,
+    resolution = 4.77*cos(latitude_rad) # https://docs.planet.com/data/imagery/basemaps/#product-specifications
+  )
+
+ggplot(resolution, aes(x = latitude, y = resolution)) +
+  geom_line() +
+  geom_point(color = "darkred") +
+  geom_text(
+    aes(label = round(resolution, 2)),
+    hjust = -0.5
+  ) +
+  scale_x_continuous(
+    name = "Latitude",
+    expand = expansion(mult = c(0.05, 0.15))
+    ) +
+  scale_y_continuous(
+    name = "Resolution (m)"
+  )
+```
+
 # Map of Downloads
 
 ```{r, fig.height=7.5, fig.width=6.5}
