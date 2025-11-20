@@ -18,17 +18,21 @@ theme_set(theme_bw())
 # Load Data
 
 ```{r}
-arts = st_read('../ARTS/ARTS_main_dataset/v.3.1.0/ARTS_main_dataset_v.3.1.0.geojson')
-planet_grids = st_read('./data/circumpolar_global_basemap_grids.geojson')
+arts = st_read(
+  '../ARTS/ARTS_main_dataset/v.6.0.0/ARTS_main_dataset_v.6.0.0.geojson'
+)
+planet_grids = st_read('./data/circumpolar_global_basemap_grids_2024.geojson')
 world = rnaturalearth::ne_countries(scale = "large", returnclass = "sf")
 world = world |>
   st_transform(3413) |>
-  st_crop(planet_grids |>
-            st_transform(3413) |>
-            st_bbox() |>
-            st_as_sfc() |>
-            st_buffer(dist = 200000) |>
-            st_bbox())
+  st_crop(
+    planet_grids |>
+      st_transform(3413) |>
+      st_bbox() |>
+      st_as_sfc() |>
+      st_buffer(dist = 200000) |>
+      st_bbox()
+  )
 ```
 
 # ARTS Tiles
@@ -37,191 +41,64 @@ world = world |>
 arts_tiles = arts |>
   st_centroid() |>
   st_buffer(
-    dist = 128 * 4.77, # 256 pixel sides
-    endCapStyle = "SQUARE"
+    dist = sqrt(256^2 + 256^2) * 4.78, # length of center point to corner for training tile with 512 pixel sides
+    endCapStyle = "ROUND" # use a circular buffer because we don't know the CRS that we will use with the final ARTS training tiles - this ensures the proper distance regardless of the orientation of the final tiles'
   )
 ```
 
 # Intersection
 
 ```{r}
-planet_grids_filter = planet_grids %>%
+arts_grids = planet_grids %>%
   st_transform(st_crs(arts)) %>%
-  st_filter(arts)
-
-arts_grids = planet_grids_filter |>
-  mutate(planet_basemap_year = as.numeric(str_extract(name, '\\d{4}'))) |>
-  st_transform(st_crs(arts)) |>
-  st_join(
-    arts,
-    left = FALSE # for inner join
-    ) |>
-  mutate(replicate = row_number(),
-         .by = c(CentroidLat, CentroidLon)) |>
-  select(
-    UID,
-    planet_basemap_year, 
-    BaseMapDate, 
-    CentroidLat, 
-    CentroidLon, 
-    id:percent_covered, 
-    replicate
-    ) |>
-  separate_wider_delim(
-    BaseMapDate, 
-    ',',
-    names = c('start_year', 'end_year'),
-    cols_remove = FALSE
-    ) |>
+  st_filter(arts) %>%
   mutate(
-    across(
-      start_year:end_year,
-      ~ .x |>
-        ymd() |>
-        year()
-      ),
-    # having NA in start_year doesn't work with line 4 of target_year = case_when(...), so switch to 0
-    start_year = case_when(is.na(start_year) ~ 0,
-                           TRUE ~ start_year)
-  ) |>
-  filter(
-    # if the earliest planet basemap is after the last date of the delineation imagery, keep the earliest basemap year
-    (planet_basemap_year > end_year & planet_basemap_year == min(planet_basemap_year)) |
-     # if the planet basemap falls between (or is equal to) the start and end years of the delineation imagery, keep the row
-     (start_year != 0 & planet_basemap_year >= start_year & planet_basemap_year <= end_year) |
-     # if the start year of the delineation imagery is unknown, keep the earliest basemap year
-      (start_year == 0 & planet_basemap_year == min(planet_basemap_year)),
-    .by = c(UID, CentroidLat, CentroidLon)
-  ) |>
-  rowwise() |>
-  mutate(
-    min_discrepancy = case_when(
-      start_year == 0 & planet_basemap_year <= end_year ~ 0,
-      start_year == 0 & planet_basemap_year > end_year ~ planet_basemap_year - end_year,
-      start_year <= planet_basemap_year & planet_basemap_year <= end_year ~ 0,
-      planet_basemap_year > end_year ~ planet_basemap_year - end_year,
-      start_year > planet_basemap_year ~ planet_basemap_year - start_year,
+    name = as.character(name),
+    year = name |>
+      str_match("[:digit:]{4}") |>
+      as.integer(),
+    grid_column = id |>
+      str_split_i("-", 1) |>
+      as.integer(),
+    grid_row = id |>
+      str_split_i("-", 2) |>
+      as.integer(),
+    basemap_name = paste0(
+      "global_quarterly_",
+      year,
+      "q3_mosaic"
     ),
-    max_discrepancy = case_when(
-     start_year == 0 ~ NA_real_,
-      TRUE ~ c(
-        planet_basemap_year - start_year, 
-        planet_basemap_year - end_year
-      )[which(
-        c(
-          abs(planet_basemap_year - start_year), 
-          abs(planet_basemap_year - end_year)
-        ) == max(
-          c(
-            abs(planet_basemap_year - start_year), 
-            abs(planet_basemap_year - end_year)
-          )
-        )
-      )][1]
+    delivery_location = paste0(
+      "planet_basemaps/global_quarterly/",
+      year,
+      "/q3/",
+      grid_column,
+      "/",
+      grid_row,
+      "/"
     )
   ) |>
-  ungroup() |>
-  st_as_sf()
-
-# st_write(
-#   arts_grids,
-#   './data/rts_polygon_basemap_correspondence_v.3.1.0.geojson'
-#   )
-
-arts_grids_filter = arts_grids |>
-  slice(1, .by = c('id', 'planet_basemap_year')) |>
-  select(planet_basemap_year, id, link, replicate) |>
-  arrange(id, planet_basemap_year)
+  select(
+    year, 
+    id, 
+    grid_column, 
+    grid_row, 
+    basemap_name, 
+    delivery_location, 
+    link
+    ) |>
+  arrange(year, grid_column, grid_row)
 
 print(
   paste(
-    'Storage Space for Planet Basemap Grids in Closest Year to Each RTS:', 
+    'Storage Space for Planet Basemap Grids in 2024:',
     round(
-      nrow(arts_grids_filter)*30/1000/1000, 
+      nrow(arts_grids) * 30 / 1000 / 1000,
       2
-      ),
+    ),
     '(TB)'
-    )
-  )
-
-# if we got all years for each grid?
-grid_ids = arts_grids_filter |>
-  pull(id) |>
-  unique()
-
-basemap_years = arts_grids_filter |>
-  pull(planet_basemap_year) |>
-  unique()
-
-print(
-  paste(
-    'Storage Space for Planet Basemap Grids in All Available Years:', 
-    round(
-      nrow(expand_grid(id = grid_ids, year = basemap_years))*30/1000/1000, 
-      2
-      ),
-    '(TB)'
-    )
-  )
-```
-
-```{r}
-grid_counts_by_id = arts_grids_filter |>
-  st_drop_geometry() |>
-  count(id)
-
-print(
-  paste(
-    'Number of unique grid locations:', 
-    as.character(nrow(grid_counts_by_id))
   )
 )
-
-print(
-  paste(
-    'Number of grids with multiple years', 
-    nrow(grid_counts_by_id |> filter(n > 1))
-  )
-)
-
-ggplot(grid_counts_by_id, aes(x = n)) +
-  geom_histogram(binwidth = 1) +
-  scale_x_continuous(name = 'Number of Years per Basemap Grid') +
-  scale_y_continuous(expand = expand_scale(mult = c(0, 0.05)))
-
-ggplot(arts_grids, 
-       aes(x = min_discrepancy,
-           color = min_discrepancy > 0,
-           fill = min_discrepancy > 0),
-       linewidth = 0.1) +
-  geom_histogram(binwidth = 1) +
-  scale_color_manual(name = 'Planet Basemap\nNewer than\nDelineation Imagery', 
-                     values = c('black', 'red')) +
-  scale_fill_manual(name = 'Planet Basemap\nNewer than\nDelineation Imagery', 
-                    values = c('black', 'red')) +
-  scale_x_continuous(name = 'Minimum Discrepancy') +
-  scale_y_continuous(name = 'Count',
-                     expand = expand_scale(mult = c(0, 0.05)))
-
-arts_grids |>
-  count(min_discrepancy)
-
-ggplot(arts_grids, 
-       aes(x = max_discrepancy,
-           color = max_discrepancy > 0,
-           fill = max_discrepancy > 0),
-       linewidth = 0.1) +
-  geom_histogram(binwidth = 1) +
-  scale_color_manual(name = 'Planet Basemap\nNewer than\nDelineation Imagery', 
-                     values = c('black', 'red')) +
-  scale_fill_manual(name = 'Planet Basemap\nNewer than\nDelineation Imagery', 
-                    values = c('black', 'red')) +
-  scale_x_continuous(name = 'Maximum Discrepancy') +
-  scale_y_continuous(name = 'Count',
-                     expand = expand_scale(mult = c(0, 0.05)))
-
-arts_grids |>
-  count(max_discrepancy)
 ```
 
 # Map of Output
@@ -229,95 +106,25 @@ arts_grids |>
 ```{r}
 ggplot() +
   geom_sf(
-    data = arts, 
-    color = 'black', 
+    data = arts,
+    color = 'black',
     fill = 'black',
     size = 0.1,
     linewidth = 0.1
-    ) +
+  ) +
   geom_sf(
-    data = arts_grids_filter, 
-    aes(color = factor(planet_basemap_year)), 
+    data = arts_grids,
+    color = "darkred",
     fill = 'transparent',
-    ) +
-  scale_color_viridis(discrete = TRUE)
+  )
 ```
 
 # Save Output
 
 ```{r}
-st_write(arts_grids_filter, './data/planet_grids_for_arts_closest_year_v.3.1.0.geojson')
-```
-
-# Additional Imagery Since ARTS v.2.1.0
-
-```{r}
-arts_grid_filter_v.2.1.0 = st_read("./data/planet_grids_for_arts_closest_year_v.2.1.0.geojson")
-arts_grid_filter_v.3.1.0 = st_read("./data/planet_grids_for_arts_closest_year_v.3.1.0.geojson")
-```
-
-```{r}
-new_grids = anti_join(
-  arts_grid_filter_v.3.1.0, 
-  arts_grid_filter_v.2.1.0 |>
-    st_drop_geometry()
-)
-
-nrow(new_grids)
-
-# st_write(
-#   new_grids,
-#   "./data/new_planet_grids_for_arts_closest_year_v.3.1.0.geojson"
-# )
-```
-
-```{r}
-new_grids_bbox = st_bbox(new_grids)
-new_grids_xlim = c(new_grids_bbox[c("xmin", "xmax")])
-new_grids_ylim = c(new_grids_bbox[c("ymin", "ymax")])
-
-ggplot() +
-  geom_sf(data = world) +
-  geom_sf(data = new_grids,
-          aes(
-            color = planet_basemap_year
-          ),
-          fill = "transparent") +
-  scale_color_viridis() +
-  coord_sf(
-    xlim = new_grids_xlim,
-    ylim = new_grids_ylim
+st_write(
+  arts_grids,
+  './data/planet_grids_2024_artsv.6.0.0.geojson'
   )
 ```
 
-## Which Grids Are Required Adjacent Grids (Not New Data in v.3.1.0)
-
-```{r}
-arts_v.2.1.0 = st_read('../ARTS/ARTS_main_dataset/v.2.1.0/ARTS_main_dataset_v.2.1.0.geojson')
-```
-
-```{r}
-new_rts = arts |>
-  anti_join(
-    arts_v.2.1.0 |>
-      st_drop_geometry()
-  )
-
-new_rts_tiles = new_rts |>
-  st_buffer(
-    dist = 128 * 4.77, # 256 pixel sides
-    endCapStyle = "SQUARE"
-  )
-
-new_adjacent_grids = new_grids %>%
-  filter(
-    !(
-      st_intersects(., new_rts_tiles) %>%
-        map_lgl(
-          ~ length(.x) > 0
-        )
-    )
-  )
-```
-
-Apparently, none of the added grids were due to missing adjacent imagery. They were all due to added RTS in ARTS v.3.1.0.
