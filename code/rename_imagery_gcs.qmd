@@ -93,6 +93,7 @@ planet_renaming_manifest.to_csv("data/planet_renaming_manifest.csv")
 ```
 
 ## Figure out Copying/Renaming of Manifests
+Previously, order manifests were stored in the order directory, but now each grid gets its own directory, so I decided to duplicate the order manifest and make sure that it ends up in the directory for each grid.
 
 ```{python}
 manifest_renaming_manifest = pd.DataFrame({

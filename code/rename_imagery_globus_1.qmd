@@ -1,0 +1,130 @@
+---
+title: "Untitled"
+format: html
+---
+
+
+# Import Packages
+
+```{python}
+import os
+from google.cloud import storage
+import google.auth
+import numpy as np
+import pandas as pd
+from pprint import pprint
+import re
+import concurrent.futures
+import datetime
+```
+
+
+# Define Functions
+
+```{python}
+def rename_data_files(old_name):
+    old_name = re.split("/", old_name)[-1]
+    year = re.search("\\d{4}(?=q3)", old_name).group()
+    grid_column = re.search("\\d{1,4}(?=-\\d{1,4})", old_name).group()
+    grid_row = re.search("(?<=\\d-)\\d{1,4}", old_name).group()
+    new_path = "/".join(
+        ["/global_quarterly", year, "q3", grid_column, grid_row, old_name]
+    )
+
+    return new_path
+```
+
+
+# Set Up GCS bucket access
+
+```{python}
+# Get GCS service account key
+%load_ext dotenv
+%dotenv
+
+gcs_key = os.getenv("GCS_PL_ORDERS_KEY")
+```
+
+```{python}
+# ! gcloud auth login
+gcloud_creds, _ = google.auth.default()
+```
+
+```{python}
+storage_client = storage.Client(project="AbruptThawMapping")
+bucket_name = "abrupt_thaw"
+bucket = storage_client.bucket(bucket_name)
+```
+
+
+# Construct Renaming Logic
+## Find Files to be renamed
+
+```{python}
+files = pd.read_csv("data/planet_globus_old_filenames.csv", names=["old_name"])
+files = files.loc[
+    ~files.old_name.str.endswith("/")
+    & files.old_name.str.startswith("global_quarterly")
+]
+files.old_name = "/global_quarterly/" + files.old_name.astype(str)
+planet_renaming_manifest = files.loc[~files.old_name.str.contains("manifest")]
+manifest_renaming_manifest = files.loc[files.old_name.str.contains("manifest")]
+```
+
+## Construct new Names for Data Files
+
+```{python}
+planet_renaming_manifest["new_name"] = planet_renaming_manifest.old_name.apply(
+    rename_data_files
+)
+planet_renaming_manifest[["old_directory", "file"]] = (
+    planet_renaming_manifest.old_name.str.rsplit("/", n=1, expand=True)
+)
+planet_renaming_manifest.drop(["file"], axis=1, inplace=True)
+```
+
+## Figure out Copying/Renaming of Manifests
+Previously, order manifests were stored in the order directory, but now each grid gets its own directory, so I decided to duplicate the order manifest and make sure that it ends up in the directory for each grid.
+
+```{python}
+manifest_renaming_manifest[["old_directory", "file"]] = (
+    manifest_renaming_manifest.old_name.str.rsplit("/", n=1, expand=True)
+)
+
+old_new_directories = planet_renaming_manifest.copy()
+old_new_directories[["new_directory", "file"]] = (
+    old_new_directories.new_name.str.rsplit("/", n=1, expand=True)
+)
+old_new_directories.drop(["old_name", "new_name", "file"], axis=1, inplace=True)
+old_new_directories.drop_duplicates(inplace=True)
+
+manifest_renaming_manifest = pd.merge(
+    old_new_directories, manifest_renaming_manifest, on="old_directory"
+)
+
+manifest_renaming_manifest["new_name"] = (
+    manifest_renaming_manifest.new_directory + "/" + manifest_renaming_manifest.file
+)
+
+manifest_renaming_manifest.drop(
+    ["old_directory", "new_directory", "file"], axis=1, inplace=True
+)
+```
+
+## Join Data and Manifest Renaming Data Frames
+
+```{python}
+renaming_guide = pd.concat(
+    [
+        planet_renaming_manifest[["old_name", "new_name"]],
+        manifest_renaming_manifest[["old_name", "new_name"]],
+    ]
+)
+
+renaming_guide.to_csv(
+    "data/planet_globus_renaming_manifest.csv", header=False, index=False
+)
+```
+
+# Rename Files
+Use rename_imagery_globus_2.sh to rename the files using the Globus CLI.
