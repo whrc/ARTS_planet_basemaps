@@ -1,0 +1,288 @@
+---
+Title: "Globus 2018q3 File Reorganization"
+format: html
+jupyter: python3
+---
+
+## Setup
+
+Load required libraries and environment variables.
+```{python}
+import os
+import pandas as pd
+import globus_sdk
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+```
+
+## Configuration
+
+Set up paths and define parent directories to search.
+```{python}
+# Get the directory where this script lives
+BASE_DIR = Path.cwd()
+DATA_DIR = BASE_DIR / "data"
+
+OUTPUT_FILE = DATA_DIR / "2018q3_files_list.txt"
+
+ENDPOINT_ID = os.getenv("GLOBUS_ENDPOINT_ID")
+
+# Define the parent directories to search
+PARENT_DIR = "/global_quarterly/2018q3/yg_initial_downloads"
+
+# Validate environment variable
+if not ENDPOINT_ID:
+    raise ValueError("Missing GLOBUS_ENDPOINT_ID in .env file.")
+
+print(f"Endpoint ID: {ENDPOINT_ID}")
+print(f"Output file: {OUTPUT_FILE}")
+print(PARENT_DIR)
+```
+
+## Helper Functions
+
+Define authentication and file listing functions.
+```{python}
+def get_transfer_client():
+    """Create and return an authenticated Globus TransferClient using interactive login"""
+
+    # Use a tutorial client ID
+    CLIENT_ID = "61338d24-54d5-408f-a10d-66c06b59f6d2"
+
+    # Create native app client
+    client = globus_sdk.NativeAppAuthClient(CLIENT_ID)
+
+    # Define the scopes we need
+    requested_scopes = "urn:globus:auth:scope:transfer.api.globus.org:all"
+
+    # Start the login flow with scopes and redirect URI
+    client.oauth2_start_flow(
+        requested_scopes=requested_scopes,
+        redirect_uri="https://auth.globus.org/v2/web/auth-code",
+    )
+
+    # Get the authorization URL
+    authorize_url = client.oauth2_get_authorize_url()
+
+    print("\n" + "=" * 50)
+    print("AUTHENTICATION REQUIRED")
+    print("=" * 50)
+    print(f"\nPlease go to this URL and login:\n\n{authorize_url}\n")
+
+    # Get the authorization code from user
+    auth_code = input("Enter the authorization code here: ").strip()
+
+    # Exchange the code for tokens
+    token_response = client.oauth2_exchange_code_for_tokens(auth_code)
+
+    # Get the transfer token
+    transfer_tokens = token_response.by_resource_server["transfer.api.globus.org"]
+    transfer_token = transfer_tokens["access_token"]
+
+    # Create transfer client with the token
+    authorizer = globus_sdk.AccessTokenAuthorizer(transfer_token)
+    tc = globus_sdk.TransferClient(authorizer=authorizer)
+
+    return tc
+
+
+def list_files_recursively(tc, endpoint_id, parent_dir):
+    """Recursively list all files under a parent directory"""
+    files = []
+
+    print(f"Listing files in: {parent_dir}")
+
+    try:
+        # Use ls to get items in current directory
+        for item in tc.operation_ls(endpoint_id, path=parent_dir, show_hidden=False):
+            if item["type"] == "file":
+                # It's a file - add it to the list
+                file_path = f"{parent_dir}/{item['name']}"
+                files.append(file_path)
+            elif item["type"] == "dir":
+                # It's a directory - recurse into it
+                subdir_path = f"{parent_dir}/{item['name']}"
+                nested_files = list_files_recursively(tc, endpoint_id, subdir_path)
+                files.extend(nested_files)
+
+    except Exception as e:
+        print(f"  Warning: Could not access {parent_dir}: {e}")
+
+    return files
+
+
+def wait_for_task(tc, task_id, task_name):
+    """Wait for a Globus task to complete and return success status"""
+    print(f"Waiting for {task_name} to complete...")
+    print(f"Task ID: {task_id}")
+
+    # Wait for task to complete (this blocks until done)
+    tc.task_wait(task_id, timeout=3600, polling_interval=10)
+
+    # Check final status after waiting
+    task = tc.get_task(task_id)
+    status = task["status"]
+
+    if status == "SUCCEEDED":
+        print(f"  ✓ {task_name} completed successfully!")
+        return True
+    elif status in ["FAILED", "INACTIVE"]:
+        print(f"  ✗ {task_name} failed with status: {status}")
+        return False
+    else:
+        print(f"  ? {task_name} ended with unexpected status: {status}")
+        return False
+```
+
+## Authentication
+
+Authenticate with Globus using interactive login.
+```{python}
+print("Authenticating with Globus...")
+tc = get_transfer_client()
+print("\n  ✓ Authentication successful")
+```
+
+## List Files
+
+Recursively list all files in the parent directories.
+```{python}
+print("\n" + "=" * 50)
+print("Listing Files")
+print("=" * 50)
+
+# Collect all files
+files = list_files_recursively(tc, ENDPOINT_ID, PARENT_DIR)
+
+print(f"\nTotal files found: {len(files)}")
+```
+
+## Construct Destination Locations
+
+Save the file list to a text file.
+```{python}
+renaming_manifest = pd.DataFrame({"source": files})
+```
+
+```{python}
+renaming_manifest["filename"] = renaming_manifest["source"].str.split("/").str[-1]
+renaming_manifest["grid_id"] = renaming_manifest["filename"].str.extract(
+    r"(\d{1,4}-\d{1,4})"
+)
+renaming_manifest[["grid_column", "grid_row"]] = renaming_manifest["grid_id"].str.split(
+    "-", n=1, expand=True
+)
+renaming_manifest["destination"] = (
+    "global_quarterly/2018/q3/"
+    + renaming_manifest["grid_column"]
+    + "/"
+    + renaming_manifest["grid_row"]
+    + "/"
+    + renaming_manifest["filename"]
+)
+renaming_manifest = renaming_manifest[["source", "destination"]]
+```
+
+```{python}
+# renaming_manifest.to_csv(
+#   "./data/planet_globus_2018q3_renaming_manifest.csv",
+#   index = False,
+#   header = False
+# )
+```
+
+## Submit Batch Transfer
+
+Create and submit a batch transfer task.
+```{python}
+print("=" * 50)
+print("Step 2: Submitting batch transfer")
+print("=" * 50)
+
+# Create transfer data object
+tdata = globus_sdk.TransferData(
+    source_endpoint=ENDPOINT_ID,
+    destination_endpoint=ENDPOINT_ID,
+    label="Batch file reorganization - move up one level",
+    sync_level="exists",  # Skip if destination exists
+)
+# Add all transfers
+for _, row in renaming_manifest.iterrows():
+    tdata.add_item(row["source"], row["destination"])
+
+# Submit transfer
+transfer_result = tc.submit_transfer(tdata)
+transfer_task_id = transfer_result["task_id"]
+print(f"Transfer task submitted: {transfer_task_id}")
+
+# Wait for transfer to complete
+transfer_success = wait_for_task(tc, transfer_task_id, "Batch transfer")
+
+if not transfer_success:
+    log_message(
+        f"[FAILED] Batch transfer failed at {datetime.now()}. Task ID: {transfer_task_id}"
+    )
+    raise RuntimeError("Transfer failed. Stopping execution.")
+```
+
+## Step 3: Delete Source Files
+
+Submit a batch delete task for the source files.
+```{python}
+print("=" * 50)
+print("Step 3: Submitting batch delete for source files")
+print("=" * 50)
+
+# Delete source files
+ddata = globus_sdk.DeleteData(
+    endpoint=ENDPOINT_ID, label="Batch cleanup after reorganization", recursive=False
+)
+
+# Add all source files for deletion
+for source_file in renaming_manifest["source"]:
+    ddata.add_item(source_file)
+
+# Submit delete
+delete_result = tc.submit_delete(ddata)
+delete_task_id = delete_result["task_id"]
+print(f"Delete task submitted: {delete_task_id}")
+
+# Wait for delete to complete
+delete_success = wait_for_task(tc, delete_task_id, "Batch file deletion")
+```
+
+## Step 4: Clean Up Empty Directories
+
+Delete empty source directories.
+```{python}
+print("=" * 50)
+print("Step 4: Cleaning up empty directories")
+print("=" * 50)
+
+# Extract unique source directories
+source_dirs = renaming_manifest["source"].apply(lambda x: str(Path(x).parent)).unique()
+# Sort in reverse (deepest first)
+source_dirs = sorted(source_dirs, reverse=True)
+
+print(f"Found {len(source_dirs)} unique source directories to delete.")
+
+# Create delete data for directories
+dir_ddata = globus_sdk.DeleteData(
+    ENDPOINT_ID, label="Batch cleanup of empty directories", recursive=True
+)
+
+# Add all directories
+for dir_path in source_dirs:
+    dir_ddata.add_item(dir_path)
+
+# Submit delete
+dir_delete_result = tc.submit_delete(dir_ddata)
+dir_delete_task_id = dir_delete_result["task_id"]
+print(f"Directory delete task submitted: {dir_delete_task_id}")
+
+# Wait for delete to complete (partial success expected)
+dir_delete_success = wait_for_task(tc, dir_delete_task_id, "Batch directory deletion")
+```

@@ -42,7 +42,8 @@ rename_log = read_delim(
 renaming_manifest = read_csv(
   "./data/planet_globus_renaming_manifest.csv",
   col_names = c("from", "to")
-)
+) |>
+  mutate(manifest = str_detect(from, "manifest"))
 
 manifest_renaming_manifest = read_csv(
   "./data/planet_globus_manifest_renaming_manifest.csv",
@@ -55,6 +56,18 @@ file_cache = read_delim(
   col_names = c("file")
 )
 batch_file = read_delim("./data/batch_transfer.txt", " ")
+
+remaining_files = read_delim(
+  "./data/files_list.txt",
+  " ",
+  col_names = c("from")
+)
+
+remaining_manifests = read_csv(
+  "./data/planet_globus_manifest_renaming_manifest_redo.csv",
+  col_names = c("from", "to")
+) |> 
+  filter(is.na(to))
 ```
 
 ```{r}
@@ -80,7 +93,7 @@ renaming_manifest = renaming_manifest |>
   )
 
 did_not_succeed = renaming_manifest |>
-  anti_join(log_succeeded, by = c("from", "to")) |> 
+  anti_join(log_succeeded, by = c("from", "to")) |>
   select(-new_from)
 
 # write_csv(
@@ -151,6 +164,20 @@ manifests_succeeded = log_succeeded |>
 #   manifests |>
 #     select(from, to),
 #   "./data/planet_globus_manifest_renaming_manifest.csv",
+#   col_names = FALSE
+# )
+```
+
+A bunch of manifests appear to have failed to transfer during both the first and second attempts, despite one of the source files existing. Get the remaining directories on the globus endpoint and join them with the renaming_manifest to create a file with the transfers to try again.
+
+```{r}
+remaining_files_to_retry = renaming_manifest |>
+  right_join(remaining_files, by = c("from"))
+
+# write_csv(
+#   remaining_files_to_retry |>
+#     select(from, to),
+#   "./data/planet_globus_manifest_renaming_manifest_redo.csv",
 #   col_names = FALSE
 # )
 ```

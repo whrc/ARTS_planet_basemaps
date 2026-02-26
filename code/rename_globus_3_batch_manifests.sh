@@ -7,44 +7,44 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(dirname "$SCRIPT_DIR")"
 DATA_DIR="$BASE_DIR/data"
 
-INPUT_FILE="$DATA_DIR/planet_globus_manifest_renaming_manifest.csv"
+INPUT_FILE="$DATA_DIR/planet_globus_manifest_renaming_manifest_redo.csv"
 LOG_FILE="$DATA_DIR/globus_rename_log.txt"
 BATCH_FILE="$DATA_DIR/batch_transfer.txt"
 DELIMITER=","
 
 ENDPOINT_ID="ff18481d-5e57-4aba-9d47-c91f6159cd36"
 
-# Define the parent directories to search (replace with your actual paths)
-PARENT_DIRS=(
-    "/global_quarterly/2016"
-    "/global_quarterly/2017"
-    "/global_quarterly/2018"
-    "/global_quarterly/2019"
-    "/global_quarterly/2020"
-    "/global_quarterly/2021"
-    "/global_quarterly/2022"
-    "/global_quarterly/2023"
-)
+# # Define the parent directories to search (replace with your actual paths)
+# PARENT_DIRS=(
+#     "/global_quarterly/2016"
+#     "/global_quarterly/2017"
+#     "/global_quarterly/2018"
+#     "/global_quarterly/2019"
+#     "/global_quarterly/2020"
+#     "/global_quarterly/2021"
+#     "/global_quarterly/2022"
+#     "/global_quarterly/2023"
+# )
 
 # Temporary file to store existing files
 EXISTING_FILES_CACHE="$DATA_DIR/existing_files_cache.txt"
 
-echo "Building cache of existing files from parent directories..."
+# echo "Building cache of existing files from parent directories..."
 
-# Clear the cache file
-> "$EXISTING_FILES_CACHE"
+# # Clear the cache file
+# > "$EXISTING_FILES_CACHE"
 
-# List all files recursively in each parent directory and cache them
-for parent_dir in "${PARENT_DIRS[@]}"; do
-    echo "Caching files from: $parent_dir"
-    globus ls --recursive "$ENDPOINT_ID:$parent_dir" 2>/dev/null | while read -r relative_path; do
-        # Construct full path: parent_dir + relative_path from recursive listing
-        echo "$parent_dir/$relative_path" >> "$EXISTING_FILES_CACHE"
-    done
-done
+# # List all files recursively in each parent directory and cache them
+# for parent_dir in "${PARENT_DIRS[@]}"; do
+#     echo "Caching files from: $parent_dir"
+#     globus ls --recursive "$ENDPOINT_ID:$parent_dir" 2>/dev/null | while read -r relative_path; do
+#         # Construct full path: parent_dir + relative_path from recursive listing
+#         echo "$parent_dir/$relative_path" >> "$EXISTING_FILES_CACHE"
+#     done
+# done
 
-echo "Cache built with $(wc -l < "$EXISTING_FILES_CACHE") files."
-echo "Processing transfer list..."
+# echo "Cache built with $(wc -l < "$EXISTING_FILES_CACHE") files."
+# echo "Processing transfer list..."
 
 # Clear the batch file
 > "$BATCH_FILE"
@@ -55,10 +55,12 @@ while IFS="$DELIMITER" read -r old_name new_name; do
     # Skip empty lines or comments
     [[ -z "$old_name" || "$old_name" =~ ^# ]] && continue
     
+    echo "Trimming whitespace."
     # Trim whitespace
     old_name=$(echo "$old_name" | xargs | tr -d '\r')
     new_name=$(echo "$new_name" | xargs | tr -d '\r')
     
+    echo "Checking if destination exists."
     # Check if destination file already exists (using cache)
     if grep -qFx "$new_name" "$EXISTING_FILES_CACHE"; then
         echo "[SKIPPED] Destination exists: $new_name"
@@ -66,6 +68,7 @@ while IFS="$DELIMITER" read -r old_name new_name; do
         continue
     fi
     
+    echo "Checking if source file exists."
     # Check if source file exists (using cache or quick check)
     old_dir=$(dirname "$old_name")
     old_file=$(basename "$old_name")
@@ -77,6 +80,7 @@ while IFS="$DELIMITER" read -r old_name new_name; do
         continue
     fi
     
+    echo "Creating destination directory hierarchy."
     # Create destination directory hierarchy
     new_dir=$(dirname "$new_name")
     current_path=""
@@ -88,6 +92,7 @@ while IFS="$DELIMITER" read -r old_name new_name; do
         fi
     done
     
+    echo "Adding to batch file."
     # Add to batch file (format: source_path destination_path)
     echo "$old_name $new_name" >> "$BATCH_FILE"
     echo "[QUEUED] $old_name -> $new_name" >> "$LOG_FILE"
