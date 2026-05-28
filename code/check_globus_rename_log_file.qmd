@@ -1,0 +1,224 @@
+---
+title: "Check Globus Renaming Log File"
+format: html
+author: "Heidi Rodenhizer"
+---
+
+# Set Up
+
+```{r}
+library(tidyverse)
+```
+
+# Load Data
+```{r}
+rename_log = read_delim(
+  "./data/globus_rename_log.txt",
+  delim = " -> ",
+  col_names = c("status_from", "to_exit_code")
+) |>
+  separate_wider_delim(
+    status_from,
+    delim = " ",
+    names = c("status", "from"),
+    too_many = "merge"
+  ) |>
+  separate_wider_delim(
+    to_exit_code,
+    delim = " ",
+    names = c("to", "exit_code"),
+    too_few = "align_start",
+    too_many = "merge"
+  ) |>
+  mutate(
+    across(
+      everything(),
+      ~ str_trim(.x, side = "both")
+    ),
+    manifest = str_detect(from, "manifest")
+  ) |>
+  arrange(from)
+
+renaming_manifest = read_csv(
+  "./data/planet_globus_renaming_manifest.csv",
+  col_names = c("from", "to")
+) |>
+  mutate(manifest = str_detect(from, "manifest"))
+
+manifest_renaming_manifest = read_csv(
+  "./data/planet_globus_manifest_renaming_manifest.csv",
+  col_names = c("new_from", "to")
+)
+
+file_cache = read_delim(
+  "./data/existing_files_cache.txt",
+  " ",
+  col_names = c("file")
+)
+batch_file = read_delim("./data/batch_transfer.txt", " ")
+
+remaining_files = read_delim(
+  "./data/files_list.txt",
+  " ",
+  col_names = c("from")
+)
+
+remaining_manifests = read_csv(
+  "./data/planet_globus_manifest_renaming_manifest_redo.csv",
+  col_names = c("from", "to")
+) |> 
+  filter(is.na(to))
+```
+
+```{r}
+log_succeeded = rename_log |>
+  filter(status == "[SUCCESS]")
+
+log_failed = rename_log |>
+  filter(status == "[FAILED]")
+
+log_skipped = rename_log |>
+  filter(status == "[SKIPPED]")
+```
+
+# Check if All Files Eventually Succeeded
+```{r}
+renaming_manifest = renaming_manifest |>
+  left_join(manifest_renaming_manifest, by = c("to")) |>
+  mutate(
+    from = case_when(
+      !is.na(new_from) ~ new_from,
+      TRUE ~ from
+    )
+  )
+
+did_not_succeed = renaming_manifest |>
+  anti_join(log_succeeded, by = c("from", "to")) |>
+  select(-new_from)
+
+# write_csv(
+#   did_not_succeed,
+#   "./data/globus_rename_lost_files.csv"
+# )
+
+# Manual inspection of a handful of cases showed a failure marked down, followed by a skipped file, and the file does show up in the new location
+succeed_not_recorded = did_not_succeed |>
+  right_join(log_skipped, by = c("from", "to"))
+# remove the cases where it said it failed and then was skipped, because they probably aren't real
+actual_failures = did_not_succeed |>
+  anti_join(succeed_not_recorded, by = c("from", "to"))
+```
+
+```{r}
+fail_not_recorded = did_not_succeed |>
+  anti_join(log_failed, by = c("from", "to"))
+
+fail_recorded = did_not_succeed |>
+  right_join(log_failed, by = c("from", "to"))
+
+nrow(fail_not_recorded) + nrow(fail_recorded) == nrow(did_not_succeed)
+```
+
+# Problems with Manifests
+The first manifest renaming worked, but following copies didn't work because the "from" file had been removed already.
+Create a new manifest to rename the manifests by copying the new location of the first copy into the "from" column for all the failed renames.
+
+```{r}
+manifests = rename_log |>
+  filter(manifest == TRUE) |>
+  mutate(
+    from = case_when(
+      status == "[FAILED]" ~ first(to),
+      TRUE ~ NA
+    ),
+    .by = from
+  ) |>
+  filter(!is.na(from)) |>
+  mutate(
+    year = str_extract(
+      from,
+      "(?<=/global_quarterly/)\\d{4}(?=/q3/)"
+    )
+  )
+
+manifests_by_year = manifests |>
+  summarise(
+    count = n(),
+    .by = year
+  ) |>
+  mutate(
+    percent = count / sum(count)
+  )
+
+nrow(actual_failures) == nrow(manifests)
+
+manifests_succeeded = log_succeeded |>
+  filter(manifest == TRUE) |>
+  mutate(
+    duplicate = row_number(),
+    .by = c(from)
+  ) |>
+  arrange(from, duplicate)
+
+# write_csv(
+#   manifests |>
+#     select(from, to),
+#   "./data/planet_globus_manifest_renaming_manifest.csv",
+#   col_names = FALSE
+# )
+```
+
+A bunch of manifests appear to have failed to transfer during both the first and second attempts, despite one of the source files existing. Get the remaining directories on the globus endpoint and join them with the renaming_manifest to create a file with the transfers to try again.
+
+```{r}
+remaining_files_to_retry = renaming_manifest |>
+  right_join(remaining_files, by = c("from"))
+
+# write_csv(
+#   remaining_files_to_retry |>
+#     select(from, to),
+#   "./data/planet_globus_manifest_renaming_manifest_redo.csv",
+#   col_names = FALSE
+# )
+```
+
+# The Other Failed Files
+
+```{r}
+data_files_to_redo = did_not_succeed |>
+  filter(manifest == FALSE)
+
+# write_csv(
+#   data_files_to_redo |>
+#     select(from, to),
+#   "./data/planet_globus_renaming_manifest_failed_file_redo.csv",
+#   col_names = FALSE
+# )
+```
+
+# Find Directories to Delete
+
+```{r}
+directories_to_delete = renaming_manifest |>
+  select(from) |>
+  rowwise() |>
+  mutate(
+    from_dir = str_flatten(
+      str_split(
+        from,
+        "/",
+        simplify = TRUE
+      )[1:4],
+      collapse = "/"
+    )
+  ) |>
+  ungroup() |>
+  distinct() |>
+  select(from_dir)
+
+# write_csv(
+#   directories_to_delete,
+#   "./data/directories_to_delete_globus.csv",
+#   col_names = FALSE
+# )
+```

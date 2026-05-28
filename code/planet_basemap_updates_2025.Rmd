@@ -1,0 +1,41 @@
+---
+title: "Planet Imagery Updates 2025"
+output: html_document
+date: "2025-06-25"
+---
+
+# Load Packages
+
+```{r}
+library(sf)
+library(tidyverse)
+```
+
+# Load Data
+
+```{r}
+arts = st_read("../ARTS/ARTS_main_dataset/v.3.1.0/ARTS_main_dataset_v.3.1.0.geojson")
+```
+
+# Delineations from 2024
+
+```{r}
+arts = arts |>
+  separate(
+    BaseMapDate, 
+    into = c("BaseMapStartDate", "BaseMapEndDate"), 
+    sep = ",",
+    remove = FALSE
+    ) |>
+  mutate(
+    across(
+      .cols = c(BaseMapStartDate, BaseMapEndDate),
+      ~ as_date(.x)
+      )
+    )
+```
+
+```{r}
+arts2024 = arts |>
+  filter(BaseMapStartDate > as_date('2024-01-01') | BaseMapEndDate > as_date('2024-01-01'))
+```

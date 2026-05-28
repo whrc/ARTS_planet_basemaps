@@ -1,0 +1,227 @@
+---
+title: "Untitled"
+format: html
+---
+
+
+# Import Packages
+
+```{python}
+import os
+from google.cloud import storage
+import google.auth
+import numpy as np
+import pandas as pd
+from pprint import pprint
+import re
+import concurrent.futures
+import datetime
+```
+
+
+# Define Functions
+
+```{python}
+def rename_data_files(old_name):
+    old_name = re.split("/", old_name)[-1]
+    year = re.search("\\d{4}(?=q3)", old_name).group()
+    grid_column = re.search("\\d{1,4}(?=-\\d{1,4})", old_name).group()
+    grid_row = re.search("(?<=\\d-)\\d{1,4}", old_name).group()
+    new_path = "/".join(["planet_basemaps/global_quarterly", year, "q3", grid_column, grid_row, old_name])
+
+    return new_path
+```
+
+
+# Set Up GCS bucket access
+
+```{python}
+# Get GCS service account key
+%load_ext dotenv
+%dotenv
+
+gcs_key = os.getenv("GCS_PL_ORDERS_KEY")
+```
+
+```{python}
+# ! gcloud auth login
+gcloud_creds, _ = google.auth.default()
+```
+
+```{python}
+storage_client = storage.Client(project="AbruptThawMapping")
+bucket_name = "abrupt_thaw"
+bucket = storage_client.bucket(bucket_name)
+```
+
+
+# Construct Renaming Logic
+## Find Files to be renamed
+
+```{python}
+delivery_directory = "planet_basemaps/global_quarterly/"
+
+# Get files to be renamed from GCS
+blobs = bucket.list_blobs(prefix=delivery_directory)
+files = [
+    file
+    for file in blobs
+    if re.search("global_quarterly/global_quarterly_\\d{4}q3", file.name)
+]
+data_files = [file for file in files if not re.search("manifest", file.name)]
+manifests = [file for file in files if re.search("manifest", file.name)]
+data_names = [file.name for file in data_files]
+manifest_names = [file.name for file in manifests]
+```
+
+## Construct new Names for Data Files
+
+```{python}
+planet_renaming_manifest = pd.DataFrame({
+    "blob": data_files,
+    "old_name": data_names
+    })
+planet_renaming_manifest["new_name"] = planet_renaming_manifest.old_name.apply(
+    rename_data_files
+)
+planet_renaming_manifest[["old_directory", "file"]] = (
+    planet_renaming_manifest.old_name.str.rsplit("/", n=1, expand=True)
+)
+planet_renaming_manifest.drop(["file"], axis=1, inplace=True)
+
+planet_renaming_manifest.to_csv("data/planet_renaming_manifest.csv")
+```
+
+## Figure out Copying/Renaming of Manifests
+Previously, order manifests were stored in the order directory, but now each grid gets its own directory, so I decided to duplicate the order manifest and make sure that it ends up in the directory for each grid.
+
+```{python}
+manifest_renaming_manifest = pd.DataFrame({
+    "blob": manifests,
+    "old_name": manifest_names
+    })
+manifest_renaming_manifest[["old_directory", "file"]] = (
+    manifest_renaming_manifest.old_name.str.rsplit("/", n=1, expand=True)
+)
+
+old_new_directories = planet_renaming_manifest.copy()
+old_new_directories[["new_directory", "file"]] = (
+    old_new_directories.new_name.str.rsplit("/", n=1, expand=True)
+)
+old_new_directories.drop(["blob", "old_name", "new_name", "file"], axis=1, inplace=True)
+old_new_directories.drop_duplicates(inplace=True)
+
+manifest_renaming_manifest = pd.merge(
+    old_new_directories, manifest_renaming_manifest, on="old_directory"
+)
+
+manifest_renaming_manifest["new_name"] = (
+    manifest_renaming_manifest.new_directory + "/" + manifest_renaming_manifest.file
+)
+
+manifest_renaming_manifest.drop(
+    ["old_directory", "new_directory", "file"], axis=1, inplace=True
+)
+```
+
+## Join Data and Manifest Renaming Data Frames
+
+```{python}
+renaming_guide = pd.concat(
+    [
+        planet_renaming_manifest[["blob", "new_name"]],
+        manifest_renaming_manifest[["blob", "new_name"]]
+    ]
+)
+```
+
+# Rename Files
+Rename all files (both data files and manifests) using bucket.copy_blob within a concurrent.futures multithreading process. Then delete all original blobs in one call.
+
+### Copy
+(Started at 2026.02.02 13:11)
+(Ended at 2026.02.02 13:36)
+~ 25 minutes for 208023 files
+~ 8321 files per minute
+```{python}
+start = datetime.datetime.now()
+
+
+def copy_blobs(blob, new_name):
+    bucket.copy_blob(blob, bucket, new_name)
+
+
+with concurrent.futures.ThreadPoolExecutor() as executor:
+    executor.map(
+        copy_blobs,
+        list(renaming_guide.blob)[1 : len(renaming_guide.blob)],
+        list(renaming_guide.new_name)[1 : len(renaming_guide.new_name)],
+    )
+
+end = datetime.datetime.now()
+print(f"Deleting all old files took {end - start}.")
+```
+
+### Check File Counts
+New files should have the same length as the renaming guide.
+```{python}
+new_files = [
+    file
+    for file in bucket.list_blobs(prefix="planet_basemaps/global_quarterly/")
+    if re.search("global_quarterly/\\d{4}/q3", file.name)
+    and not re.search("global_quarterly/2024/q3", file.name)
+]
+
+print(len(files))
+print(len(new_files))
+len(new_files) == renaming_guide.shape[0]
+```
+
+```{python}
+len(
+    [
+        file
+        for file in bucket.list_blobs(
+            prefix="planet_basemaps/global_quarterly/global_quarterly_2016q3_mosaic/"
+        )
+    ]
+)
+```
+
+
+### Delete
+Deleting 173432 files took 1:09:07
+~ 2500 files per minute
+```{python}
+
+if (
+    len(new_files) == renaming_guide.shape[0]
+):  # check that all files have been copied before deleting
+    start = datetime.datetime.now()
+    batch_size = 1000
+    batches = [files[i : i + batch_size] for i in range(0, len(files), batch_size)]
+
+    for batch in batches:
+        # Delete all old blobs
+        with storage_client.batch():
+            for blob in batch:
+                blob.delete()
+
+    end = datetime.datetime.now()
+    print(f"Deleting all old files took {end - start}.")
+```
+
+# Compare Speed to Old Code
+I didn't record how long the old renaming code took (2024 downloads), but I do remember that it took more than 24 hours. Comparing the number of files in the 2024 folder vs. all the other folders might give us an idea of whether the code is noticeably faster now.
+
+The new method achieves about 5400 files per minute while the old method achieves < 100 files per minute. So we saw an ~50x increase in speed.
+```{python}
+files_2024 = [
+    file
+    for file in bucket.list_blobs(prefix="planet_basemaps/global_quarterly/")
+    if re.search("global_quarterly/2024/q3", file.name)
+]
+
+print(len(files_2024)/(24*60))
+print((8300+2500)/2) # total time for copy and delete
+```
